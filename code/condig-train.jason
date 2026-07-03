@@ -1,0 +1,22 @@
+{
+  "work_dir": "C:/Users/19807/Desktop/E-F-TRAIN/F-14-00/集团势函数训练结果",
+  "data_prefix": "SOAP_Descriptors",
+  
+  "model_params": {
+    "hidden_sizes": [1, 1, 1],
+    "dropout_rate": 1,
+    "num_atoms": 1
+  },
+  
+  "training_params": {
+    "epochs": 1,
+    "learning_rate": 1e-1,
+    "weight_decay": 1e-1,
+    "test_size": 1,
+    "eval_frequency": 1,
+    "full_pred_frequency": 1,
+    "clip_grad_epoch": 1,
+    "clip_grad_norm": 1,
+    "random_seed": 1
+  }
+}
