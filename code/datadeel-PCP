@@ -1,0 +1,155 @@
+import os
+import json
+import numpy as np
+from ase.io import read
+from dscribe.descriptors import SOAP
+from scipy.spatial.distance import cdist
+
+def generate_soap_descriptors(
+    WorkDir, 
+    FileName, 
+    output_file, 
+    config_file
+):
+   
+    try:
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        print(f"成功加载配置文件: {config_file}")
+    except Exception as e:
+        print(f"读取配置文件失败: {e}")
+        return
+
+    try:
+        # 读取文件
+        outcar = read(os.path.join(WorkDir, FileName), index=':')
+        total_samples = len(outcar)
+
+        # 从配置中提取索引参数
+        start_structure = config['start_structure']
+        end_structure = config['end_structure']
+        step = config['step']
+
+        # 校验索引范围有效性
+        if (start_structure < 0 
+            or end_structure >= total_samples 
+            or start_structure > end_structure):
+            print(f"错误: 无效的结构索引范围。start={start_structure}, end={end_structure}, 总结构数={total_samples}")
+            return
+
+        
+        traj_indices = list(range(start_structure, end_structure + 1))[::step]
+        traj = [outcar[i] for i in traj_indices]
+
+      
+        soap_short = SOAP(
+            species=["Li", "Mn", "Ti", "O"],
+            periodic=True,
+            r_cut=config['r_cut'],
+            n_max=config['n_max'],
+            l_max=config['l_max'],
+            sigma=config['sigma'],
+            average="off"
+        )
+        
+        soap_long_oxygen = SOAP(
+            species=["O"],  
+            periodic=True,
+            r_cut=config['r_cut2'],
+            n_max=config['n_max2'],
+            l_max=config['l_max2'],
+            sigma=config['sigma2'],
+            average="off"
+        )
+
+        # 数据存储容器
+        energies, forces, descriptors, derivatives, distances = [], [], [], [], []
+
+        # 主处理循环
+        for atoms in traj:
+            
+            oxygen_indices = [i for i, atom in enumerate(atoms) if atom.symbol == 'O']
+            if not oxygen_indices:
+                continue
+
+            
+            positions = atoms.get_positions()
+            total_energy = atoms.get_potential_energy()
+            current_forces = atoms.get_forces()
+
+           
+            for center in oxygen_indices:
+                # 计算距离矩阵
+                oxy_pos = positions[center]
+                dist = cdist([oxy_pos], positions).astype(np.float32).flatten()
+                distances.append(dist)
+                
+                # 存储能量和力
+                energies.append(total_energy)
+                forces.append(current_forces[center].astype(np.float32))
+                
+                # 计算PCP描述符
+                deriv_short, desc_short = soap_short.derivatives(
+                    atoms, centers=[center], method="numerical", return_descriptor=True
+                )
+                deriv_long_oxy, desc_long_oxy = soap_long_oxygen.derivatives(
+                    atoms, centers=[center], method="numerical", return_descriptor=True
+                )
+
+                
+                merged_desc = np.hstack([desc_short, desc_long_oxy])
+                merged_deriv = np.concatenate([deriv_short, deriv_long_oxy], axis=-1)
+
+                descriptors.append(merged_desc.astype(np.float32))
+                derivatives.append(merged_deriv.astype(np.float32))
+
+        # 数据保存与验证
+        if descriptors:
+            # 转换为numpy数组
+            r_array = np.array(distances)
+            e_array = np.array(energies).astype(np.float32)
+            d_array = np.vstack(descriptors)
+            deriv_array = np.array(derivatives).squeeze(axis=1)  # 形状: (n_samples, n_atoms, 3, n_features)
+            f_array = np.array(forces)
+
+            # 保存文件
+            np.save(os.path.join(WorkDir, output_file + "_r.npy"), r_array)
+            np.save(os.path.join(WorkDir, output_file + "_E.npy"), e_array)
+            np.save(os.path.join(WorkDir, output_file + "_D.npy"), d_array)
+            np.save(os.path.join(WorkDir, output_file + "_dD_dr.npy"), deriv_array)
+            np.save(os.path.join(WorkDir, output_file + "_F.npy"), f_array)
+
+            # 打印详细形状报告
+            print("\n=== 文件维度报告 ===")
+            print(f"[{output_file}_r.npy] 原子距离矩阵: {r_array.shape} (样本数, 原子总数)")
+            print(f"[{output_file}_E.npy] 体系能量数据: {e_array.shape} (样本数,)")
+            print(f"[{output_file}_D.npy] 合并描述符: {d_array.shape} (样本数, 特征总数)")
+            print(f"[{output_file}_dD_dr.npy] 描述符导数: {deriv_array.shape} (样本数, 原子数, 3, 特征总数)")
+            print(f"[{output_file}_F.npy] 原子受力数据: {f_array.shape} (样本数, 3)")
+
+            # 特征统计信息
+            print("\n=== 特征统计 ===")
+            print(f"总样本数: {len(descriptors)}")
+            print(f"短程SOAP特征数: {soap_short.get_number_of_features()} (0-{config['r_cut']}Å, 所有元素)")
+            print(f"长程SOAP特征数: {soap_long_oxygen.get_number_of_features()} (0-{config['r_cut2']}Å, 仅氧原子)")
+            print(f"合并特征总数: {d_array.shape[1]} = {soap_short.get_number_of_features()} + {soap_long_oxygen.get_number_of_features()}")
+
+            # 数据范围验证
+            print("\n=== 数据校验 ===")
+            print(f"能量范围: [{e_array.min():.3f}, {e_array.max():.3f}] eV")
+            print(f"受力范围: [{f_array.min():.3f}, {f_array.max():.3f}] eV/Å")
+            print(f"描述符均值: {np.mean(d_array):.3f} ± {np.std(d_array):.3f}")
+        else:
+            print("无有效数据生成：所有结构均无氧原子或发生索引错误")
+
+    except Exception as e:
+        print(f"致命错误: {str(e)}")
+        raise
+
+if __name__ == "__main__":
+    generate_soap_descriptors(
+        WorkDir='D:/E-F-TRAIN/F-14-00',
+        FileName='OUTCAR',
+        output_file='SOAP_Descriptors',
+        config_file='config.json' 
+    )
