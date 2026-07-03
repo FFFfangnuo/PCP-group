@@ -1,0 +1,13 @@
+{
+  "r_cut": 1,
+  "n_max": 1,
+  "l_max": 1,
+  "sigma": 1,
+  "r_cut2": 2,
+  "n_max2": 2,
+  "l_max2": 2,
+  "sigma2": 2,
+  "start_structure": 3,
+  "end_structure": 3,
+  "step": 3
+}
